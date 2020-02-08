@@ -4,6 +4,7 @@ require('colors');
 const dotenv = require('dotenv');
 const path = require('path');
 const yargs = require('yargs');
+const fs = require('fs');
 
 const Migrator = require('./lib');
 
@@ -11,30 +12,28 @@ const Migrator = require('./lib');
 dotenv.config();
 
 let { argv: args } = yargs
-  .usage("Usage: migrate -d <mongo-uri> [[create|up|down <migration-name>]|list] [optional options]")
+  .usage('Usage: migrate [[create|up|down <migration-name>]|list] [optional options]')
   .demand(1)
   .default('config', 'migrate')
-  .config(
-    'config',
-    'filepath to an options configuration json file',
-    pathToConfigFile => {
-      // Get any args from env vars
-      const envs = process.env;
-      const envVarOptions = {};
-      Object.keys(envs).map((key) => {
-        if (key.includes('MIGRATE_')) {
-          const [, option] = key.match(/MIGRATE_(.*$)/);
-          envVarOptions[option] = envs[key];
-        }
-      });
+  .config('config', 'filepath to an options configuration json file', pathToConfigFile => {
+    // Get any args from env vars
+    const envs = process.env;
+    const envVarOptions = {};
+    Object.keys(envs).map(key => {
+      if (key.includes('MIGRATE_')) {
+        const [, option] = key.match(/MIGRATE_(.*$)/);
+        envVarOptions[option] = envs[key];
+      }
+    });
 
-      let configOptions = {};
-      try {
-        configOptions = require(pathToConfigFile)
-      } catch (err) { /* noop */ }
-      return Object.assign({}, configOptions, envVarOptions);
+    let configOptions = {};
+    try {
+      configOptions = require(pathToConfigFile);
+    } catch (err) {
+      /* noop */
     }
-  )
+    return Object.assign({}, configOptions, envVarOptions);
+  })
 
   .command('list'.cyan, 'Lists all migrations and their current state.')
   .example('migrate list')
@@ -42,15 +41,20 @@ let { argv: args } = yargs
   .command('create <migration-name>'.cyan, 'Creates a new migration file.')
   .example('migrate create add_users')
 
-  .command('up [migration-name]'.cyan,
+  .command(
+    'up [migration-name]'.cyan,
     'Migrates all the migration files that have not yet been run in chronological order. ' +
-    'Not including [migration-name] will run UP on all migrations that are in a DOWN state.')
+      'Not including [migration-name] will run UP on all migrations that are in a DOWN state.'
+  )
   .example('migrate up add_user')
 
   .command('down <migration-name>'.cyan, 'Rolls back migrations down to given name (if down function was provided)')
   .example('migrate down delete_names')
 
-  .command('prune'.cyan, 'Allows you to delete extraneous migrations by removing extraneous local migration files/database migrations.')
+  .command(
+    'prune'.cyan,
+    'Allows you to delete extraneous migrations by removing extraneous local migration files/database migrations.'
+  )
   .example('migrate prune')
   .option('collection', {
     type: 'string',
@@ -59,7 +63,6 @@ let { argv: args } = yargs
     nargs: 1
   })
   .option('d', {
-    demand: true,
     type: 'string',
     alias: 'dbConnectionUri',
     description: 'The URI of the database connection'.yellow,
@@ -90,7 +93,8 @@ let { argv: args } = yargs
 
   .option('autosync', {
     type: 'boolean',
-    description: 'Automatically add new migrations in the migrations folder to the database instead of asking interactively'
+    description:
+      'Automatically add new migrations in the migrations folder to the database instead of asking interactively'
   })
 
   .help('h')
@@ -104,10 +108,22 @@ if (!command) process.exit(1);
 // Change directory before anything if the option was provided
 if (args.c) process.chdir(args.c);
 
-// Make sure we have a connection URI
-if (!args.dbConnectionUri) {
-  console.error('You need to provide the Mongo URI to persist migration status.\nUse option --dbConnectionUri / -d to provide the URI.'.red);
-  process.exit(1);
+let connectionPath = '';
+let connection;
+if (args.connectionPath) {
+  connectionPath = path.resolve(args.connectionPath);
+  const connectionFunction = require(connectionPath);
+  if (connectionFunction) {
+    connection = connectionFunction;
+  }
+} else {
+  if (!args.dbConnectionUri) {
+    console.error(
+      'You need to provide the Mongo URI to persist migration status.\nUse option --dbConnectionUri / -d to provide the URI.'
+        .red
+    );
+    process.exit(1);
+  }
 }
 
 let migrator = new Migrator({
@@ -115,6 +131,7 @@ let migrator = new Migrator({
   templatePath: args['template-file'],
   dbConnectionUri: args.dbConnectionUri,
   collectionName: args.collection,
+  connection,
   autosync: args.autosync,
   cli: true
 });
@@ -131,7 +148,6 @@ process.on('exit', () => {
   migrator.close();
 });
 
-
 let promise;
 switch (command) {
   case 'create':
@@ -146,7 +162,11 @@ switch (command) {
     promise = migrator.run('up', migrationName);
     break;
   case 'down':
-    validateSubArgs({ min: 1, max: 1, desc: 'You must provide the name of the migration to stop at when migrating down.'.red });
+    validateSubArgs({
+      min: 1,
+      max: 1,
+      desc: 'You must provide the name of the migration to stop at when migrating down.'.red
+    });
     promise = migrator.run('down', migrationName);
     break;
   case 'list':
@@ -163,13 +183,13 @@ switch (command) {
 }
 
 promise
-  .then(() => { process.exit(0); })
-  .catch((err) => {
+  .then(() => {
+    process.exit(0);
+  })
+  .catch(err => {
     console.warn(err.message.yellow);
     process.exit(1);
   });
-
-
 
 function validateSubArgs({ min = 0, max = Infinity, desc }) {
   const argsLen = args._.length - 1;
